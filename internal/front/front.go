@@ -54,15 +54,19 @@ func Assemble(p stefan.Params, t float64, lr stefan.LambdaResult) Result {
 	s := 2 * lam * rootAlphaT
 
 	// 由温度分布 T(x,t)=Tw+(Tf−Tw)·erf(x/(2√αt))/erf(λ) 在壁面 x=0 求导：
-	//   q_w(t) = k(Tf−Tw)/(√(παt)) · e^{-λ²}/erf(λ)   (t>0)
-	// t=0 为理想阶跃边界下的 +Inf。
+	//   dT/dx|_x=0 = (Tf−Tw)/(√(παt)) · 1/erf(λ)
+	//   q_w(t) = k(Tf−Tw)/(√(παt)) · 1/erf(λ)   (t>0)
+	// 注意 e^{-λ²} 只出现在“界面 x=s(t) 处”的梯度里（界面 Stefan 条件
+	// ρLf·ds/dt = q_w·e^{-λ²}）；壁面在 x=0，高斯因子取 e^0=1。
+	// 若把 e^{-λ²} 误乘进壁面热流，结果会系统性偏低 e^{-λ²} 倍
+	// （预置冰层工况约偏低 6%），且内部潜热账反而看似自洽，须由外部
+	// 梯度推导的专门测试钉死。t=0 为理想阶跃边界下的 +Inf。
 	var q, speed float64
 	if t == 0 {
 		q = math.Inf(1)
 		speed = math.Inf(1)
 	} else {
-		q = p.K * (p.Tf - p.Tw) / (math.SqrtPi * rootAlphaT) *
-			math.Exp(-lam*lam) / erfx.Erf(lam)
+		q = p.K * (p.Tf - p.Tw) / (math.SqrtPi * rootAlphaT) / erfx.Erf(lam)
 		speed = lam * math.Sqrt(p.Alpha/t)
 	}
 
