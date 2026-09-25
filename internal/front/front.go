@@ -53,16 +53,19 @@ func Assemble(p stefan.Params, t float64, lr stefan.LambdaResult) Result {
 	rootAlphaT := math.Sqrt(p.Alpha * t)
 	s := 2 * lam * rootAlphaT
 
-	// 由温度分布 T(x,t)=Tw+(Tf−Tw)·erf(x/(2√αt))/erf(λ) 在壁面 x=0 求导：
-	//   q_w(t) = k(Tf−Tw)/(√(παt)) · e^{-λ²}/erf(λ)   (t>0)
-	// t=0 为理想阶跃边界下的 +Inf。
+	// 固相温度分布 T(x,t)=Tw+(Tf−Tw)·erf(x/(2√αt))/erf(λ)，0≤x≤s。
+	// 壁面热流取冷壁 x=0 处的真实空间梯度：
+	//   q_w(t) = k(Tf−Tw)/(√(παt)) · 1/erf(λ)          (t>0)
+	// 注意界面 x=s 处的梯度另含 e^{-λ²}：
+	//   q_i(t) = k(Tf−Tw)/(√(παt)) · e^{-λ²}/erf(λ) = ρLf·ds/dt
+	// 二者差因子 e^{λ²}，不可混用：固相在持续被冷却，热流沿 x 衰减，
+	// q_w 同时带走潜热与固相显热，故恒大于 q_i。t=0 为理想阶跃边界下的 +Inf。
 	var q, speed float64
 	if t == 0 {
 		q = math.Inf(1)
 		speed = math.Inf(1)
 	} else {
-		q = p.K * (p.Tf - p.Tw) / (math.SqrtPi * rootAlphaT) *
-			math.Exp(-lam*lam) / erfx.Erf(lam)
+		q = p.K * (p.Tf - p.Tw) / (math.SqrtPi * rootAlphaT) / erfx.Erf(lam)
 		speed = lam * math.Sqrt(p.Alpha/t)
 	}
 

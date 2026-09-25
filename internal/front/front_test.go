@@ -100,9 +100,10 @@ func TestStagnationAsLatentHeatDiverges(t *testing.T) {
 	}
 }
 
-// TestHeatFluxStefanBalance 壁面热流必须与界面 Stefan 能量守恒自洽：
-// ρLf·ds/dt = k·(界面处温度梯度)，且界面热流等于壁面热流
-// （固相内无内热源、1/√t 自相似，梯度的热流处处相等）。
+// TestHeatFluxStefanBalance 界面处 Stefan 能量守恒自洽：
+// ρLf·ds/dt = k·(界面 x=s 处温度梯度)。注意壁面热流不等于该量——
+// 固相持续被冷却、热流沿 x 衰减，壁面热流还要额外带走固相显热，
+// 二者严格相差因子 e^{λ²}：q_wall = q_interface·e^{λ²}。
 func TestHeatFluxStefanBalance(t *testing.T) {
 	p := iceParams()
 	r, err := Compute(p, 1800)
@@ -110,13 +111,69 @@ func TestHeatFluxStefanBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	rho := p.K / (p.Alpha * p.C) // 由 α=k/(ρc) 反演密度
-	interfaceRelease := rho * p.Lf * r.FrontSpeed
-	if math.Abs(interfaceRelease-r.WallHeatFlux)/r.WallHeatFlux > 1e-9 {
-		t.Errorf("能量守恒不闭合：壁面热流 %.6f vs ρLf·ds/dt %.6f",
-			r.WallHeatFlux, interfaceRelease)
+	latentRelease := rho * p.Lf * r.FrontSpeed
+
+	// 界面 x=s 处的梯度热流（含 e^{-λ²}）必须与潜热释放闭合。
+	lam := r.Lambda.Lambda
+	rootAT := math.Sqrt(p.Alpha * 1800)
+	interfaceFlux := p.K * (p.Tf - p.Tw) / (math.SqrtPi * rootAT) *
+		math.Exp(-lam*lam) / math.Erf(lam)
+	if math.Abs(interfaceFlux-latentRelease)/latentRelease > 1e-9 {
+		t.Errorf("界面 Stefan 条件不闭合：界面梯度热流 %.6f vs ρLf·ds/dt %.6f",
+			interfaceFlux, latentRelease)
+	}
+	// 壁面热流必须严格大于界面潜热流，比值恰为 e^{λ²}。
+	if !(r.WallHeatFlux > interfaceFlux) {
+		t.Errorf("壁面热流 %.4f 应大于界面潜热流 %.4f（差额为固相显热取热）",
+			r.WallHeatFlux, interfaceFlux)
+	}
+	if math.Abs(r.WallHeatFlux/(interfaceFlux)-math.Exp(lam*lam)) > 1e-12 {
+		t.Errorf("q_wall/q_interface 不等于 e^{λ²}")
 	}
 	if !(r.WallHeatFlux > 0 && r.FrontSpeed > 0) {
 		t.Errorf("热流与速度应为正")
+	}
+}
+
+// temperature 是外部独立写出的自相似温度场，仅用于测试核对，
+// 不经过被测的 Assemble：T(x,t)=Tw+(Tf−Tw)·erf(x/(2√αt))/erf(λ)。
+func temperature(p stefan.Params, lam, t, x float64) float64 {
+	return p.Tw + (p.Tf-p.Tw)*math.Erf(x/(2*math.Sqrt(p.Alpha*t)))/math.Erf(lam)
+}
+
+// TestWallHeatFluxExternalGradient 钉死壁面热流：用外部独立构造的
+// 温度场在冷壁 x=0 处做单侧有限差商求空间梯度，再乘导热系数，
+// 与服务输出比较。预置冰层工况 1 小时必须回到 1432.4 W/m² 附近。
+//
+// 这条测试与服务内部公式完全解耦：哪怕服务里 e^{-λ²} 之类的因子
+// 再被悄悄加回去，有限差商推导也会立刻把偏差抓出来。
+func TestWallHeatFluxExternalGradient(t *testing.T) {
+	p := iceParams()
+	const tm = 3600.0
+	r, err := Compute(p, tm)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 独立有限差商：q_w = k·∂T/∂x|_{x=0}（T 随 x 单调升高，正向取热为正）。
+	// 步长按 √(αt) 缩放；取 h/√(αt)=1e-5 时单侧差商的截断与舍入
+	// 误差合计约 1e-12（壁面处 T''=0，主导截断项天然消失）。
+	h := 1e-5 * math.Sqrt(p.Alpha*tm)
+	grad := (temperature(p, r.Lambda.Lambda, tm, h) - p.Tw) / h
+	qExternal := p.K * grad
+
+	const want = 1432.4 // 外部梯度推导值 [W/m²]
+	if math.Abs(qExternal-want)/want > 1e-3 {
+		t.Fatalf("外部推导基准自身漂移：q=%.4f，预期 %.1f", qExternal, want)
+	}
+	if math.Abs(r.WallHeatFlux-qExternal)/qExternal > 1e-9 {
+		t.Errorf("壁面热流 %.4f 与外部温度场梯度推导 %.4f 不符，相对偏差 %.2e",
+			r.WallHeatFlux, qExternal,
+			math.Abs(r.WallHeatFlux-qExternal)/qExternal)
+	}
+	if math.Abs(r.WallHeatFlux-want)/want > 2e-4 {
+		t.Errorf("冰层 1 小时壁面热流 = %.4f W/m²，预期约 %.1f W/m²",
+			r.WallHeatFlux, want)
 	}
 }
 
